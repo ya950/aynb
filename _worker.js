@@ -40,7 +40,7 @@ async function handleRequest(request, env) {
     const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
     const updateStatus = getUpdateStatus(updatedIPs);
 
-    const response = generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, successCount, failureCount, currentTime, updateStatus);
+    const response = generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus);
 
     return response;
   } catch (error) {
@@ -248,7 +248,7 @@ function getResponseHeaders() {
   };
 }
 
-function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, successCount, failureCount, currentTime, updateStatus) {
+function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
   return new Response(`
 ################################################################
 Cloudflare域名配置信息 / Cloudflare Domain Configuration
@@ -272,7 +272,10 @@ ${IP_API}
 ################################################################
 整理结果 / Results
 ---------------------------------------------------------------
-IPv4：
+CUSTOM_IPS：
+${CUSTOM_IPS}
+
+IP_API：
 ${ips.join('\n')}
 
 ---------------------------------------------------------------
