@@ -1,6 +1,11 @@
 export default {
   async fetch(request, env, ctx) {
     return await handleRequest(request, env);
+  },
+
+  // 添加对scheduled事件的处理
+  async scheduled(event, env, ctx) {
+    await handleRequest(event, env);
   }
 };
 
@@ -9,8 +14,8 @@ async function handleRequest(request, env) {
   const ZONE_ID = env.ZONE_ID;
   const DOMAIN = env.DOMAIN;
   const CUSTOM_IPS = env.CUSTOM_IPS || '';
-  const PASSWORD = env.PASSWORD || '';
   const IP_API = env.IP_API || 'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt';
+  const PASSWORD = env.PASSWORD || '';
   const EMAIL = env.EMAIL || '';
 
   // 检查密码
@@ -29,9 +34,7 @@ async function handleRequest(request, env) {
   }
 
   try {
-    if (!API_TOKEN || !ZONE_ID || !DOMAIN || !EMAIL) {
-      throw new Error('必要的变量未设置。请检查 API_TOKEN, ZONE_ID, DOMAIN 和 EMAIL。');
-    }
+    checkRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
 
     let ips = await getIPs(CUSTOM_IPS, IP_API);
     if (ips.length === 0) {
@@ -42,64 +45,18 @@ async function handleRequest(request, env) {
     await deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL);
 
     let updateResults = await updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN);
+    const successCount = updateResults.filter(r => r.success).length;
+    const failureCount = updateResults.filter(r => !r.success).length;
 
     const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-
     const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
-    const updateStatus = updatedIPs.length > 0 
-      ? `更新成功，共更新了 ${updatedIPs.length} 个 IP: ${updatedIPs.join(', ')}`
-      : '没有 IP 被更新';
+    const updateStatus = getUpdateStatus(updatedIPs);
 
-    const response = `
-################################################################
-Cloudflare域名配置信息 / Cloudflare Domain Configuration
----------------------------------------------------------------
-域名 / Domain：${DOMAIN}
-邮箱 / Email：${maskEmail(EMAIL)}
-区域ID / Zone ID：${maskZoneID(ZONE_ID)}
-API令牌 / API Token：${maskAPIToken(API_TOKEN)}
+    const response = generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, successCount, failureCount, currentTime, updateStatus);
 
----------------------------------------------------------------
-################################################################
-配置信息 / Configuration
----------------------------------------------------------------
-DoH：
-https://cloudflare-dns.com/dns-query
-
-IP_API：
-${IP_API}
-
----------------------------------------------------------------
-################################################################
-整理结果 / Results
----------------------------------------------------------------
-IPv4：
-${ips.join('\n')}
-
----------------------------------------------------------------
-################################################################
-执行日志 / Execution Log
----------------------------------------------------------------
-${currentTime} 变量加载完成
-${currentTime} 域名解析完成
-${currentTime} 删除现有 A/AAAA 记录
-${currentTime} API获取 A/AAAA记录${ips.join(', ')}
-${currentTime} API调用完成
-${currentTime} IP去重完成
-${currentTime} BAN_IP清理完成
-${currentTime} ${updateStatus}
-    `;
-
-    return new Response(response, {
-      headers: { 
-        'Content-Type': 'text/plain;charset=UTF-8',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
-      }
-    });
+    return response;
   } catch (error) {
-    console.error('发生错误:', error);
+    logError('发生错误:', error);
     return new Response(`更新失败 / Update Failed: ${error.message}`, {
       status: 500,
       headers: {
@@ -109,6 +66,12 @@ ${currentTime} ${updateStatus}
         'Expires': '0'
       }
     });
+  }
+}
+
+function checkRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API) {
+  if (!API_TOKEN || !ZONE_ID || !DOMAIN || !EMAIL || !IP_API) {
+    throw new Error('必要的变量未设置。请检查 API_TOKEN, ZONE_ID, DOMAIN, EMAIL 和 IP_API。');
   }
 }
 
@@ -129,34 +92,30 @@ function maskEmail(email) {
 }
 
 async function getIPs(CUSTOM_IPS, IP_API) {
-  let ips = [];
-  
-  if (CUSTOM_IPS) {
-    ips = CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(ip => ip);
-  }
-  
+  let ips = CUSTOM_IPS ? CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(ip => ip) : [];
+
   if (ips.length === 0) {
     try {
+      console.log(`${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} 从 IP_API 获取 IP 地址`);
       let response = await fetch(IP_API);
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`从 IP_API 获取 IP 地址失败: HTTP 错误 ${response.status}`);
       }
       let text = await response.text();
-      ips = text.split(/[,\n]+/).map(ip => ip.trim()).filter(ip => {
+      ips = text.trim().split(/[,\n]+/).map(ip => ip.trim()).filter(ip => {
         // 简单的 IP 地址验证
         return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-fA-F0-9:]+$/.test(ip);
       });
       console.log('从 IP_API 获取的 IP 地址:', ips);
     } catch (error) {
-      console.error('获取 IP 地址失败:', error);
+      logError('从 IP_API 获取 IP 地址失败:', error);
       throw new Error('无法从 IP_API 获取有效的 IP 地址: ' + error.message);
     }
   }
-  
-  if (ips.length === 0) {
-    throw new Error('未能获取到有效的 IP 地址');
-  }
-  
+
+  // 对 IP 地址进行去重
+  ips = [...new Set(ips)];
+
   return ips;
 }
 
@@ -223,6 +182,77 @@ async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
     })
   });
   
+  if (!createResponse.ok) {
+    const errorData = await createResponse.json();
+    throw new Error(`创建 ${type} 记录 ${content} 失败: ${errorData.errors[0].message}`);
+  }
+
   const createData = await createResponse.json();
   return { success: createData.success, content };
+}
+
+function logError(message, error) {
+  console.error(message, error);
+}
+
+function getUpdateStatus(updatedIPs) {
+  return updatedIPs.length > 0 
+    ? `更新成功，共更新了 ${updatedIPs.length} 个 IP: ${updatedIPs.join(', ')}`
+    : '没有 IP 被更新';
+}
+
+function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, successCount, failureCount, currentTime, updateStatus) {
+  return new Response(`
+################################################################
+Cloudflare域名配置信息 / Cloudflare Domain Configuration
+---------------------------------------------------------------
+域名 / Domain：${DOMAIN}
+邮箱 / Email：${maskEmail(EMAIL)}
+区域ID / Zone ID：${maskZoneID(ZONE_ID)}
+API令牌 / API Token：${maskAPIToken(API_TOKEN)}
+
+---------------------------------------------------------------
+################################################################
+配置信息 / Configuration
+---------------------------------------------------------------
+DoH：
+https://cloudflare-dns.com/dns-query
+
+IP_API：
+${IP_API}
+
+---------------------------------------------------------------
+################################################################
+整理结果 / Results
+---------------------------------------------------------------
+IPv4：
+${ips.join('\n')}
+
+---------------------------------------------------------------
+################################################################
+更新结果 / Update Results
+---------------------------------------------------------------
+更新成功: ${successCount} 个
+更新失败: ${failureCount} 个
+
+---------------------------------------------------------------
+################################################################
+执行日志 / Execution Log
+---------------------------------------------------------------
+${currentTime} 变量加载完成
+${currentTime} 域名解析完成
+${currentTime} 删除现有 A/AAAA 记录
+${currentTime} API获取 A/AAAA记录${ips.join(', ')}
+${currentTime} API调用完成
+${currentTime} IP去重完成
+${currentTime} BAN_IP清理完成
+${currentTime} ${updateStatus}
+    `, {
+      headers: { 
+        'Content-Type': 'text/plain;charset=UTF-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    });
 }
