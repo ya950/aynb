@@ -1,43 +1,30 @@
-**部署步骤**:
+使用说明:
 
-1. 登录到您的 Cloudflare 控制台,进入 "Workers" 页面。
+1. 将代码部署到 Cloudflare Workers 平台上。
+2. 在 Cloudflare Workers 的环境变量中设置以下变量:
+   - `API_TOKEN`: Cloudflare API 令牌
+   - `ZONE_ID`: Cloudflare 区域 ID
+   - `DOMAIN`: 要更新的域名
+   - `CUSTOM_IPS`: (可选) 自定义 IP 地址列表,以逗号或换行符分隔
+   - `PASSWORD`: (可选) 访问密码,用于限制对该 Workers 的访问
+   - `IP_API`: (可选) 获取 IP 地址的 API 地址列表,以逗号分隔。默认为 `https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt`
+   - `EMAIL`: Cloudflare 账户邮箱
+   - `TGTOKEN`: (可选) Telegram 机器人 Token
+   - `TGID`: (可选) Telegram 群组 ID
+3. 访问 Workers 的 URL 即可触发 DNS 记录的更新。
+4. 如果设置了 `TGTOKEN` 和 `TGID` 变量,Workers 将在 DNS 记录更新完成后向指定的 Telegram 群组发送通知。
+5. 您还可以设置定期执行 DNS 记录更新的 Cron 任务。
 
-2. 创建一个新的 Worker,并将 `Workers.js` 文件中的代码复制粘贴到 Worker 的编辑器中。
+变量使用说明:
 
-3. 在 "Settings" > "Variables" 中,添加以下环境变量:
-   - `API_TOKEN`: 您的 Cloudflare API 令牌。
-   - `ZONE_ID`: 您要更新 DNS 记录的域名对应的 Cloudflare 区域 ID。
-   - `DOMAIN`: 您要更新 DNS 记录的域名。
-   - `CUSTOM_IPS`: (可选) 如果您想使用自定义的 IP 地址列表,请在这里设置。多个 IP 地址之间可以用逗号或换行符分隔。
-   - `PASSWORD`: 设置一个访问密码,访问 Worker 时需要在 URL 中提供。
-   - `EMAIL`: 您的 Cloudflare 账户邮箱。
+- `API_TOKEN`: Cloudflare API 令牌,用于认证 Cloudflare API 请求。
+- `ZONE_ID`: Cloudflare 区域 ID,用于指定要更新 DNS 记录的区域。
+- `DOMAIN`: 要更新的域名。
+- `CUSTOM_IPS`: (可选) 自定义 IP 地址列表,以逗号或换行符分隔。如果设置了该变量,系统将优先使用这些 IP 地址,而不是从 `IP_API` 获取。
+- `PASSWORD`: (可选) 访问密码,用于限制对该 Workers 的访问。如果设置了密码,访问 Workers 时需要在 URL 中添加 `?password=<PASSWORD>` 参数。
+- `IP_API`: (可选) 获取 IP 地址的 API 地址列表,以逗号分隔。默认为 `https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt`。如果 `CUSTOM_IPS` 未设置,系统将从这些 API 地址获取 IP 地址。
+- `EMAIL`: Cloudflare 账户邮箱,用于认证 Cloudflare API 请求。
+- `TGTOKEN`: (可选) Telegram 机器人 Token,用于在 DNS 记录更新完成后向 Telegram 群组发送通知。
+- `TGID`: (可选) Telegram 群组 ID,用于接收 DNS 记录更新通知。
 
-4. 保存并部署您的 Cloudflare Worker。
-
-**变量说明**:
-
-- `API_TOKEN`: 您的 Cloudflare API 令牌,用于认证 Cloudflare API 调用。
-- `ZONE_ID`: 您要更新 DNS 记录的域名对应的 Cloudflare 区域 ID。
-- `DOMAIN`: 您要更新 DNS 记录的域名。
-- `CUSTOM_IPS`: (可选) 如果您想使用自定义的 IP 地址列表,请在这里设置。多个 IP 地址之间可以用逗号或换行符分隔。
-- `PASSWORD`: 设置一个访问密码,访问 Worker 时需要在 URL 中提供。
-- `EMAIL`: 您的 Cloudflare 账户邮箱,用于认证 Cloudflare API 调用。
-
-**支持的 DNS 记录类型**:
-
-- `A`: IPv4 地址记录
-- `AAAA`: IPv6 地址记录
-
-您可以在 `updateDNSRecords` 函数中添加对其他类型 DNS 记录的支持,比如 `CNAME`、`MX` 等。
-
-**访问 Worker**:
-
-1. 访问您 Cloudflare Worker 的 URL,格式为 `https://your-worker.your-subdomain.workers.dev?password=your_password`。
-2. 将 `your-worker` 替换为您的 Cloudflare Worker 的名称,`your-subdomain` 替换为您的 Cloudflare 子域名。
-3. `your_password` 替换为您在 Cloudflare Workers 的 "Settings" > "Variables" 中设置的 `PASSWORD` 变量的值。
-
-**日志和错误处理**:
-
-您可以在 Cloudflare Workers 的 "Logs" 页面查看 Worker 的运行日志,其中包含了 IP 地址获取、DNS 记录删除和创建等操作的详细信息。
-
-如果在运行过程中出现任何错误,错误信息也会记录在日志中,方便您进行问题诊断和解决。
+如果您有任何其他问题,欢迎随时告知我。
