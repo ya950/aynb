@@ -12,8 +12,10 @@
    - `TGTOKEN`: (可选) Telegram 机器人 Token
    - `TGID`: (可选) Telegram 群组 ID
 3. 访问 Workers 的 URL 即可触发 DNS 记录的更新。
-4. 如果设置了 `TGTOKEN` 和 `TGID` 变量,Workers 将在 DNS 记录更新完成后向指定的 Telegram 群组发送通知。
-5. 您还可以设置定期执行 DNS 记录更新的 Cron 任务。
+   例如：https://fd1.1990909.xyz/?password=sd123
+         https://【你的自定义域】/?password=【你的密码】
+5. 如果设置了 `TGTOKEN` 和 `TGID` 变量,Workers 将在 DNS 记录更新完成后向指定的 Telegram 群组发送通知。
+6. 您还可以设置定期执行 DNS 记录更新的 Cron 任务。
 
 变量使用说明:
 
