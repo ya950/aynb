@@ -29,8 +29,8 @@ async function handleRequest(request, env) {
   }
 
   try {
-    if (!API_TOKEN || !ZONE_ID || !DOMAIN) {
-      throw new Error('必要的变量未设置。请检查 API_TOKEN, ZONE_ID 和 DOMAIN。');
+    if (!API_TOKEN || !ZONE_ID || !DOMAIN || !EMAIL) {
+      throw new Error('必要的变量未设置。请检查 API_TOKEN, ZONE_ID, DOMAIN 和 EMAIL。');
     }
 
     let ips = await getIPs(CUSTOM_IPS, IP_API);
@@ -38,8 +38,8 @@ async function handleRequest(request, env) {
       throw new Error('无法获取有效的 IP 地址');
     }
 
-    // 删除现有的 A 记录
-    await deleteExistingARecords(API_TOKEN, ZONE_ID, DOMAIN);
+    // 删除现有的 A/AAAA 记录
+    await deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL);
 
     let updateResults = await updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN);
 
@@ -56,8 +56,8 @@ Cloudflare域名配置信息 / Cloudflare Domain Configuration
 ---------------------------------------------------------------
 域名 / Domain：${DOMAIN}
 邮箱 / Email：${maskEmail(EMAIL)}
-区域ID / Zone ID：${maskString(ZONE_ID)}
-API令牌 / API Token：${maskString(API_TOKEN)}
+区域ID / Zone ID：${maskZoneID(ZONE_ID)}
+API令牌 / API Token：${maskAPIToken(API_TOKEN)}
 
 ---------------------------------------------------------------
 ################################################################
@@ -82,8 +82,8 @@ ${ips.join('\n')}
 ---------------------------------------------------------------
 ${currentTime} 变量加载完成
 ${currentTime} 域名解析完成
-${currentTime} 删除现有 A 记录
-${currentTime} API获取 A记录${ips.join(', ')}
+${currentTime} 删除现有 A/AAAA 记录
+${currentTime} API获取 A/AAAA记录${ips.join(', ')}
 ${currentTime} API调用完成
 ${currentTime} IP去重完成
 ${currentTime} BAN_IP清理完成
@@ -99,6 +99,7 @@ ${currentTime} ${updateStatus}
       }
     });
   } catch (error) {
+    console.error('发生错误:', error);
     return new Response(`更新失败 / Update Failed: ${error.message}`, {
       status: 500,
       headers: {
@@ -111,9 +112,14 @@ ${currentTime} ${updateStatus}
   }
 }
 
-function maskString(str) {
-  if (str.length <= 8) return str;
-  return str.substr(0, 3) + '*'.repeat(str.length - 6) + str.substr(-3);
+function maskZoneID(zoneID) {
+  if (zoneID.length <= 8) return zoneID;
+  return zoneID.substr(0, 3) + '*'.repeat(zoneID.length - 6) + zoneID.substr(-3);
+}
+
+function maskAPIToken(apiToken) {
+  if (apiToken.length <= 8) return apiToken;
+  return apiToken.substr(0, 3) + '*'.repeat(apiToken.length - 6) + apiToken.substr(-3);
 }
 
 function maskEmail(email) {
@@ -137,8 +143,8 @@ async function getIPs(CUSTOM_IPS, IP_API) {
       }
       let text = await response.text();
       ips = text.split(/[,\n]+/).map(ip => ip.trim()).filter(ip => {
-        // 简单的 IPv4 验证
-        return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
+        // 简单的 IP 地址验证
+        return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-fA-F0-9:]+$/.test(ip);
       });
       console.log('从 IP_API 获取的 IP 地址:', ips);
     } catch (error) {
@@ -154,14 +160,15 @@ async function getIPs(CUSTOM_IPS, IP_API) {
   return ips;
 }
 
-async function deleteExistingARecords(API_TOKEN, ZONE_ID, DOMAIN) {
-  console.log(`${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} 删除现有 A 记录`);
+async function deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL) {
+  console.log(`${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} 删除现有 A/AAAA 记录`);
 
-  let listUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=A&name=${DOMAIN}`;
+  let listUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=A,AAAA&name=${DOMAIN}`;
 
   let response = await fetch(listUrl, {
     method: 'GET',
     headers: {
+      'X-Auth-Email': EMAIL,
       'Authorization': `Bearer ${API_TOKEN}`,
       'Content-Type': 'application/json'
     }
@@ -170,52 +177,52 @@ async function deleteExistingARecords(API_TOKEN, ZONE_ID, DOMAIN) {
   let data = await response.json();
 
   if (!response.ok) {
-    throw new Error(`获取 A 记录失败: ${response.status} ${response.statusText}`);
+    throw new Error(`获取 DNS 记录失败: ${response.status} ${response.statusText}`);
   }
 
-  for (let record of data.result) {
-    let deleteUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${record.id}`;
-
-    let deleteResponse = await fetch(deleteUrl, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (!deleteResponse.ok) {
-      throw new Error(`删除记录失败: ${deleteResponse.status} ${deleteResponse.statusText}`);
-    }
-  }
+  const deletePromises = data.result.map(record => deleteDNSRecord(API_TOKEN, ZONE_ID, record.id, EMAIL));
+  await Promise.all(deletePromises);
 }
 
 async function updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN) {
-  let results = [];
-  
-  for (let ip of ips) {
-    let type = ip.includes(':') ? 'AAAA' : 'A';
-    
-    let createUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records`;
+  const createPromises = ips.map(ip => createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, ip.includes(':') ? 'AAAA' : 'A', ip));
+  const createResults = await Promise.all(createPromises);
+  return createResults;
+}
 
-    let createResponse = await fetch(createUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        type: type,
-        name: DOMAIN,
-        content: ip,
-        ttl: 1,
-        proxied: false
-      })
-    });
-    
-    let createData = await createResponse.json();
-    results.push({ success: createData.success, content: ip });
-  }
+async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL) {
+  const deleteUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${recordId}`;
+  const deleteResponse = await fetch(deleteUrl, {
+    method: 'DELETE',
+    headers: {
+      'X-Auth-Email': EMAIL,
+      'Authorization': `Bearer ${API_TOKEN}`,
+      'Content-Type': 'application/json'
+    }
+  });
   
-  return results;
+  if (!deleteResponse.ok) {
+    throw new Error(`删除记录失败: ${deleteResponse.status} ${deleteResponse.statusText}`);
+  }
+}
+
+async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
+  const createUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records`;
+  const createResponse = await fetch(createUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      type,
+      name: DOMAIN,
+      content,
+      ttl: 1,
+      proxied: false
+    })
+  });
+  
+  const createData = await createResponse.json();
+  return { success: createData.success, content };
 }
