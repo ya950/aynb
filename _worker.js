@@ -26,7 +26,7 @@ async function handleRequest(request, env) {
 
     let ips = await getIPs(CUSTOM_IPS, IP_API);
     if (ips.length === 0) {
-      throw new Error('无法获取有效的 IP 地址');
+      throw new Error('无法从配置的 IP_API 获取有效的 IP 地址');
     }
 
     // 删除现有的 A/AAAA 记录
@@ -44,8 +44,9 @@ async function handleRequest(request, env) {
 
     return response;
   } catch (error) {
-    logError('发生错误:', error);
-    return new Response(`更新失败 / Update Failed: ${error.message}`, {
+    const errorMessage = `更新失败 / Update Failed: ${error.message}`;
+    logError(errorMessage, error);
+    return new Response(errorMessage, {
       status: 500,
       headers: getResponseHeaders()
     });
@@ -124,7 +125,7 @@ async function fetchIPsFromAPI(IP_API) {
 }
 
 async function deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL) {
-  logInfo(`${getCurrentTime()} 删除现有 A/AAAA 记录`);
+  logInfo(`${getCurrentTime()} 删除 ${DOMAIN} 的现有 A/AAAA 记录`);
 
   let listUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=A,AAAA&name=${DOMAIN}`;
 
@@ -144,10 +145,10 @@ async function deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL) {
   let data = await response.json();
 
   if (!response.ok) {
-    throw new Error(`获取 DNS 记录失败: ${response.status} ${response.statusText}`);
+    throw new Error(`获取 ${DOMAIN} 的 DNS 记录失败: ${response.status} ${response.statusText}`);
   }
 
-  const deletePromises = data.result.map(record => deleteDNSRecord(API_TOKEN, ZONE_ID, record.id, EMAIL));
+  const deletePromises = data.result.map(record => deleteDNSRecord(API_TOKEN, ZONE_ID, record.id, EMAIL, DOMAIN));
   await Promise.all(deletePromises);
 }
 
@@ -157,7 +158,7 @@ async function updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN) {
   return createResults;
 }
 
-async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL) {
+async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL, DOMAIN) {
   const deleteUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${recordId}`;
   const deleteResponse = await fetchWithRetry(
     deleteUrl,
@@ -173,7 +174,7 @@ async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL) {
   );
   
   if (!deleteResponse.ok) {
-    throw new Error(`删除记录失败: ${deleteResponse.status} ${deleteResponse.statusText}`);
+    throw new Error(`删除 ${DOMAIN} 的记录失败: ${deleteResponse.status} ${deleteResponse.statusText}`);
   }
 }
 
@@ -287,7 +288,7 @@ ${ips.join('\n')}
 ---------------------------------------------------------------
 ${currentTime} 变量加载完成
 ${currentTime} 域名解析完成
-${currentTime} 删除现有 A/AAAA 记录
+${currentTime} 删除 ${DOMAIN} 的现有 A/AAAA 记录
 ${currentTime} API获取 A/AAAA记录${ips.join(', ')}
 ${currentTime} API调用完成
 ${currentTime} IP去重完成
