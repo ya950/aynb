@@ -9,7 +9,18 @@ async function handleRequest(request, env, ctx) {
   const ZONE_ID = env.ZONE_ID;
   const DOMAIN = env.DOMAIN;
   const CUSTOM_IPS = env.CUSTOM_IPS || '';
+  const PASSWORD = env.PASSWORD || ''; // 新增：密码
   const IP_API = 'https://api.ipify.org';
+
+  // 检查密码
+  const url = new URL(request.url);
+  const providedPassword = url.searchParams.get('password');
+  if (PASSWORD && providedPassword !== PASSWORD) {
+    return new Response(renderHTML('密码错误', '请提供正确的密码来访问此页面。'), {
+      headers: { 'Content-Type': 'text/html;charset=UTF-8' },
+      status: 403
+    });
+  }
 
   try {
     // 检查必要的变量是否已设置
@@ -31,20 +42,46 @@ async function handleRequest(request, env, ctx) {
     console.log('更新结果:', JSON.stringify(updateResult, null, 2));
 
     // 返回结果
-    return new Response(JSON.stringify(updateResult), {
-      headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      }
-    })
+    return new Response(renderHTML('DNS 更新成功', `
+      <p>域名: ${DOMAIN}</p>
+      <p>更新的 IP 地址: ${ips.join(', ')}</p>
+      <pre>${JSON.stringify(updateResult, null, 2)}</pre>
+    `), {
+      headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+    });
   } catch (error) {
     // 错误处理
     console.error('发生错误:', error);
-    return new Response(JSON.stringify({ error: error.message, stack: error.stack }), {
+    return new Response(renderHTML('更新失败', `
+      <p>更新 DNS 记录时发生错误：</p>
+      <pre>${error.message}\n${error.stack}</pre>
+    `), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    })
+      headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+    });
   }
+}
+
+function renderHTML(title, content) {
+  return `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${title}</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; padding: 20px; }
+        h1 { color: #333; }
+        pre { background-color: #f4f4f4; padding: 10px; border-radius: 5px; }
+      </style>
+    </head>
+    <body>
+      <h1>${title}</h1>
+      ${content}
+    </body>
+    </html>
+  `;
 }
 
 async function getIPs(CUSTOM_IPS, IP_API) {
