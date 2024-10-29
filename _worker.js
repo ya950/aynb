@@ -9,7 +9,7 @@ export default {
 };
 
 async function handleRequest(request, env) {
-  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, PASSWORD, EMAIL } = getEnvVariables(env);
+  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, PASSWORD, EMAIL } = loadEnvironmentVariables(env);
 
   // 检查密码
   const url = new URL(request.url);
@@ -22,7 +22,7 @@ async function handleRequest(request, env) {
   }
 
   try {
-    checkRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
+    validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
 
     let ips = await getIPs(CUSTOM_IPS, IP_API);
     if (ips.length === 0) {
@@ -53,7 +53,7 @@ async function handleRequest(request, env) {
   }
 }
 
-function getEnvVariables(env) {
+function loadEnvironmentVariables(env) {
   return {
     API_TOKEN: env.API_TOKEN,
     ZONE_ID: env.ZONE_ID,
@@ -65,29 +65,10 @@ function getEnvVariables(env) {
   };
 }
 
-function checkRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API) {
+function validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API) {
   if (!API_TOKEN || !ZONE_ID || !DOMAIN || !EMAIL || !IP_API) {
     throw new Error('必要的变量未设置。请检查 API_TOKEN, ZONE_ID, DOMAIN, EMAIL 和 IP_API。');
   }
-}
-
-function maskZoneID(zoneID) {
-  return maskString(zoneID, 3, 6);
-}
-
-function maskAPIToken(apiToken) {
-  return maskString(apiToken, 3, 6);
-}
-
-function maskEmail(email) {
-  if (!email) return '';
-  const [username, domain] = email.split('@');
-  return username.charAt(0) + '*'.repeat(username.length - 1) + '@' + domain;
-}
-
-function maskString(str, startLength, endLength) {
-  if (str.length <= 8) return str;
-  return str.substr(0, startLength) + '*'.repeat(str.length - startLength - endLength) + str.substr(-endLength);
 }
 
 async function getIPs(CUSTOM_IPS, IP_API) {
@@ -116,7 +97,7 @@ function isValidIP(ip) {
 }
 
 async function fetchIPsFromAPI(IP_API) {
-  let response = await fetch(IP_API);
+  let response = await fetchWithRetry(IP_API, {}, 3);
   if (!response.ok) {
     throw new Error(`从 IP_API 获取 IP 地址失败: HTTP 错误 ${response.status}`);
   }
@@ -141,7 +122,7 @@ async function deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL) {
     },
     3
   );
-  
+
   let data = await response.json();
 
   if (!response.ok) {
@@ -172,7 +153,7 @@ async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL, DOMAIN) {
     },
     3
   );
-  
+
   if (!deleteResponse.ok) {
     throw new Error(`删除 ${DOMAIN} 的记录失败: ${deleteResponse.status} ${deleteResponse.statusText}`);
   }
@@ -198,7 +179,7 @@ async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
     },
     3
   );
-  
+
   if (!createResponse.ok) {
     const errorData = await createResponse.json();
     throw new Error(`创建 ${type} 记录 ${content} 失败: ${errorData.errors[0].message}`);
@@ -234,7 +215,7 @@ function getCurrentTime() {
 }
 
 function getUpdateStatus(updatedIPs) {
-  return updatedIPs.length > 0 
+  return updatedIPs.length > 0
     ? `更新成功，共更新了 ${updatedIPs.length} 个 IP: ${updatedIPs.join(', ')}`
     : '没有 IP 被更新';
 }
@@ -249,7 +230,15 @@ function getResponseHeaders() {
 }
 
 async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
-  const responseHtml = `
+  const responseHtml = generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus);
+
+  return new Response(responseHtml, {
+    headers: getResponseHeaders()
+  });
+}
+
+function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -370,8 +359,23 @@ async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, 
 </body>
 </html>
 `;
+}
 
-  return new Response(responseHtml, {
-    headers: getResponseHeaders()
-  });
+function maskZoneID(zoneID) {
+  return maskString(zoneID, 3, 6);
+}
+
+function maskAPIToken(apiToken) {
+  return maskString(apiToken, 3, 6);
+}
+
+function maskEmail(email) {
+  if (!email) return '';
+  const [username, domain] = email.split('@');
+  return username.charAt(0) + '*'.repeat(username.length - 1) + '@' + domain;
+}
+
+function maskString(str, startLength, endLength) {
+  if (str.length <= 8) return str;
+  return str.substr(0, startLength) + '*'.repeat(str.length - startLength - endLength) + str.substr(-endLength);
 }
