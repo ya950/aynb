@@ -15,7 +15,7 @@ async function handleRequest(request, env) {
   const url = new URL(request.url);
   const providedPassword = url.searchParams.get('password');
   if (PASSWORD && providedPassword !== PASSWORD) {
-    return new Response('访问被拒绝 / Access Denied', {
+    return new Response('访问被拒绝', {
       status: 403,
       headers: getResponseHeaders()
     });
@@ -40,11 +40,11 @@ async function handleRequest(request, env) {
     const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
     const updateStatus = getUpdateStatus(updatedIPs);
 
-    const response = generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus);
+    const response = await generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus);
 
     return response;
   } catch (error) {
-    const errorMessage = `更新失败 / Update Failed: ${error.message}`;
+    const errorMessage = `更新失败: ${error.message}`;
     logError(errorMessage, error);
     return new Response(errorMessage, {
       status: 500,
@@ -222,11 +222,11 @@ async function fetchWithRetry(url, options, retryCount) {
 }
 
 function logError(message, error) {
-  console.error(`[ERROR] ${message}`, error);
+  console.error(`[错误] ${message}`, error);
 }
 
 function logInfo(message) {
-  console.log(`[INFO] ${message}`);
+  console.log(`[信息] ${message}`);
 }
 
 function getCurrentTime() {
@@ -241,62 +241,137 @@ function getUpdateStatus(updatedIPs) {
 
 function getResponseHeaders() {
   return {
-    'Content-Type': 'text/plain;charset=UTF-8',
+    'Content-Type': 'text/html;charset=UTF-8',
     'Cache-Control': 'no-cache, no-store, must-revalidate',
     'Pragma': 'no-cache',
     'Expires': '0'
   };
 }
 
-function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
-  return new Response(`
-################################################################
-Cloudflare域名配置信息 / Cloudflare Domain Configuration
----------------------------------------------------------------
-域名 / Domain：${DOMAIN}
-邮箱 / Email：${maskEmail(EMAIL)}
-区域ID / Zone ID：${maskZoneID(ZONE_ID)}
-API令牌 / API Token：${maskAPIToken(API_TOKEN)}
+async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
+  const responseHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Cloudflare 域名配置</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    h2 {
+      color: #444;
+    }
+    .section {
+      background-color: white;
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .info-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .info-item span {
+      font-weight: bold;
+    }
+    .info-item p {
+      margin: 0;
+    }
+    .success-count,
+    .failure-count {
+      font-weight: bold;
+    }
+    .log-item {
+      margin-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Cloudflare 域名配置</h1>
+    <div class="section">
+      <h2>Cloudflare 域名配置</h2>
+      <div class="info-item">
+        <span>域名:</span>
+        <p>${DOMAIN}</p>
+      </div>
+      <div class="info-item">
+        <span>邮箱:</span>
+        <p>${maskEmail(EMAIL)}</p>
+      </div>
+      <div class="info-item">
+        <span>区域 ID:</span>
+        <p>${maskZoneID(ZONE_ID)}</p>
+      </div>
+      <div class="info-item">
+        <span>API 令牌:</span>
+        <p>${maskAPIToken(API_TOKEN)}</p>
+      </div>
+    </div>
+    <div class="section">
+      <h2>配置信息</h2>
+      <div class="info-item">
+        <span>DoH:</span>
+        <p>https://cloudflare-dns.com/dns-query</p>
+      </div>
+      <div class="info-item">
+        <span>IP_API:</span>
+        <p>${IP_API}</p>
+      </div>
+    </div>
+    <div class="section">
+      <h2>结果</h2>
+      <div class="info-item">
+        <span>CUSTOM_IPS:</span>
+        <p>${CUSTOM_IPS.split('\n').join('<br>')}</p>
+      </div>
+      <div class="info-item">
+        <span>IP_API:</span>
+        <p>${ips.join('<br>')}</p>
+      </div>
+    </div>
+    <div class="section">
+      <h2>更新结果</h2>
+      <div class="info-item">
+        <span>更新成功:</span>
+        <p class="success-count">${successCount}</p>
+      </div>
+      <div class="info-item">
+        <span>更新失败:</span>
+        <p class="failure-count">${failureCount}</p>
+      </div>
+    </div>
+    <div class="section">
+      <h2>执行日志</h2>
+      <div class="log-item">${currentTime} 变量加载完成</div>
+      <div class="log-item">${currentTime} 域名解析完成</div>
+      <div class="log-item">${currentTime} 删除 ${DOMAIN} 的现有 A/AAAA 记录</div>
+      <div class="log-item">${currentTime} API获取 A/AAAA记录${ips.join(', ')}</div>
+      <div class="log-item">${currentTime} API调用完成</div>
+      <div class="log-item">${currentTime} IP去重完成</div>
+      <div class="log-item">${currentTime} ${updateStatus}</div>
+    </div>
+  </div>
+</body>
+</html>
+`;
 
----------------------------------------------------------------
-################################################################
-配置信息 / Configuration
----------------------------------------------------------------
-DoH：
-https://cloudflare-dns.com/dns-query
-
-IP_API：
-${IP_API}
-
----------------------------------------------------------------
-################################################################
-整理结果 / Results
----------------------------------------------------------------
-CUSTOM_IPS：
-${CUSTOM_IPS}
-
-IP_API：
-${ips.join('\n')}
-
----------------------------------------------------------------
-################################################################
-更新结果 / Update Results
----------------------------------------------------------------
-更新成功: ${successCount} 个
-更新失败: ${failureCount} 个
-
----------------------------------------------------------------
-################################################################
-执行日志 / Execution Log
----------------------------------------------------------------
-${currentTime} 变量加载完成
-${currentTime} 域名解析完成
-${currentTime} 删除 ${DOMAIN} 的现有 A/AAAA 记录
-${currentTime} API获取 A/AAAA记录${ips.join(', ')}
-${currentTime} API调用完成
-${currentTime} IP去重完成
-${currentTime} ${updateStatus}
-    `, {
-      headers: getResponseHeaders()
-    });
+  return new Response(responseHtml, {
+    headers: getResponseHeaders()
+  });
 }
