@@ -5,28 +5,17 @@
    - `API_TOKEN`: Cloudflare API 令牌
    - `ZONE_ID`: Cloudflare 区域 ID
    - `DOMAIN`: 要更新的域名
-   - `CUSTOM_IPS`: (可选) 自定义 IP 地址列表,以逗号或换行符分隔
+   - `CUSTOM_IPS`: (可选) 自定义 IP 地址列表,以逗号或换行符分隔，支持绑定IPV4,IPV6,域名[172.67.129.67，2606:4700:3036::ac43:8143，sy.us.com]
    - `PASSWORD`: (可选) 访问密码,用于限制对该 Workers 的访问
-   - `IP_API`: (可选) 获取 IP 地址的 API 地址列表,以逗号分隔。默认为 `https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt`
+   - `IP_API`: (可选) 获取 IP 地址的 API 地址列表,以逗号分隔。例如 `https://raw.githubusercontent.com/heads/main/bestproxy.txt`
    - `EMAIL`: Cloudflare 账户邮箱
-   - `TGTOKEN`: (可选) Telegram 机器人 Token
-   - `TGID`: (可选) Telegram 群组 ID
+   - KV空间绑定
+   - UPDATE_HISTORY: 用于存储更新历史的 KV 存储对象。
+     创建一个KV空间命名为UPDATE_HISTORY
+     绑定刚创建的KV空间UPDATE_HISTORY，变量名称也为UPDATE_HISTORY
 3. 访问 Workers 的 URL 即可触发 DNS 记录的更新。
    例如：https://fd2.1990909.xyz/?password=sd123
          https://【你的自定义域】/?password=【你的密码】
 5. 如果设置了 `TGTOKEN` 和 `TGID` 变量,Workers 将在 DNS 记录更新完成后向指定的 Telegram 群组发送通知。
 6. 您还可以设置定期执行 DNS 记录更新的 Cron 任务。
-
-变量使用说明:
-
-- `API_TOKEN`: Cloudflare API 令牌,用于认证 Cloudflare API 请求。
-- `ZONE_ID`: Cloudflare 区域 ID,用于指定要更新 DNS 记录的区域。
-- `DOMAIN`: 要更新的域名。
-- `CUSTOM_IPS`: (可选) 自定义 IP 地址列表,以逗号或换行符分隔。如果设置了该变量,系统将优先使用这些 IP 地址,而不是从 `IP_API` 获取。
-- `PASSWORD`: (可选) 访问密码,用于限制对该 Workers 的访问。如果设置了密码,访问 Workers 时需要在 URL 中添加 `?password=<PASSWORD>` 参数。
-- `IP_API`: (可选) 获取 IP 地址的 API 地址列表,以逗号分隔。默认为 `https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt`。如果 `CUSTOM_IPS` 未设置,系统将从这些 API 地址获取 IP 地址。
-- `EMAIL`: Cloudflare 账户邮箱,用于认证 Cloudflare API 请求。
-- `TGTOKEN`: (可选) Telegram 机器人 Token,用于在 DNS 记录更新完成后向 Telegram 群组发送通知。
-- `TGID`: (可选) Telegram 群组 ID,用于接收 DNS 记录更新通知。
-
-如果您有任何其他问题,欢迎随时告知我。
+   你可以使用标准的 Cron 表达式格式。例如，*/5 * * * * 表示每 5 分钟运行一次。
