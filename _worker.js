@@ -24,7 +24,7 @@ async function handleRequest(request, env) {
   try {
     validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
 
-    let ips = await getIPs(CUSTOM_IPS, IP_API);
+    let ips = await getIPs(CUSTOM_IPS, IP_API, url);
     if (ips.length === 0) {
       throw new Error('无法从配置的 IP_API 获取有效的 IP 地址');
     }
@@ -71,10 +71,14 @@ function validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API) {
   }
 }
 
-async function getIPs(CUSTOM_IPS, IP_API) {
-  let ips = CUSTOM_IPS ? CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP) : [];
-
-  if (ips.length === 0) {
+async function getIPs(CUSTOM_IPS, IP_API, url) {
+  let ips = [];
+  const ipAddresses = url.searchParams.get('ip_addresses');
+  if (ipAddresses) {
+    ips = ipAddresses.split(',').map(ip => ip.trim());
+  } else if (CUSTOM_IPS) {
+    ips = CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP);
+  } else {
     try {
       logInfo(`${getCurrentTime()} 从 IP_API 获取 IP 地址`);
       ips = await fetchIPsFromAPI(IP_API);
@@ -84,10 +88,8 @@ async function getIPs(CUSTOM_IPS, IP_API) {
       throw new Error('无法从 IP_API 获取有效的 IP 地址: ' + error.message);
     }
   }
-
   // 对 IP 地址进行去重
   ips = [...new Set(ips)];
-
   return ips;
 }
 
@@ -182,7 +184,7 @@ async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
 
   if (!createResponse.ok) {
     const errorData = await createResponse.json();
-    throw new Error(`创建 ${type} 记录 ${content} 失败: ${errorData.errors[0].message}`);
+    throw new Error(`创建 ${type} 记录 ${content} 失败: ${errorData.errors.message}`);
   }
 
   const createData = await createResponse.json();
