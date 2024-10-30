@@ -3,135 +3,70 @@ export default {
     const url = new URL(request.url);
     const pathname = url.pathname;
 
-    // 检查密码,但对 /update 和 /history 路径不做密码检查
-    const providedPassword = url.searchParams.get('password');
-    if (pathname !== '/update' && pathname !== '/history' && env.PASSWORD && providedPassword !== env.PASSWORD) {
-      return new Response('访问被拒绝', {
-        status: 403,
-        headers: getResponseHeaders()
-      });
-    }
-
-    if (pathname === '/update' && request.method === 'POST') {
-      return await handleManualUpdate(request, env);
-    } else if (pathname === '/history') {
-      return await getUpdateHistory(env);
-    } else {
-      return await handleRequest(request, env);
+    try {
+      switch (pathname) {
+        case '/update':
+          return request.method === 'POST' ? await handleManualUpdate(env) : methodNotAllowed();
+        case '/history':
+          return await getUpdateHistory(env);
+        default:
+          if (!await checkPassword(url, env)) {
+            return new Response('访问被拒绝', { status: 403, headers: getResponseHeaders() });
+          }
+          return await handleRequest(env);
+      }
+    } catch (error) {
+      return handleError(error);
     }
   },
 
   async scheduled(event, env, ctx) {
-    await handleRequest(event, env);
+    try {
+      await handleRequest(env);
+    } catch (error) {
+      console.error('Scheduled task failed:', error);
+    }
   }
 };
 
-async function handleRequest(request, env) {
-  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, EMAIL } = loadEnvironmentVariables(env);
-
-  try {
-    validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
-
-    let ips = await getIPs(CUSTOM_IPS, IP_API);
-    if (ips.length === 0) {
-      throw new Error('无法从配置的 IP_API 获取有效的 IP 地址');
-    }
-
-    // 删除现有的 A/AAAA 记录
-    await deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL);
-
-    let updateResults = await updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN);
-    const successCount = updateResults.filter(r => r.success).length;
-    const failureCount = updateResults.filter(r => !r.success).length;
-
-    const currentTime = getCurrentTime();
-    const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
-    const updateStatus = getUpdateStatus(updatedIPs);
-
-    // 获取每个IP地址的地理位置信息
-    const ipLocationInfo = await getIPLocationInfo(updatedIPs);
-
-    // 保存更新历史记录
-    await saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo);
-
-    const response = await generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
-
-    return response;
-  } catch (error) {
-    const errorMessage = `更新失败: ${error.message}`;
-    logError(errorMessage, error);
-    return new Response(errorMessage, {
-      status: 500,
-      headers: getResponseHeaders()
-    });
-  }
+async function checkPassword(url, env) {
+  const providedPassword = url.searchParams.get('password');
+  return !env.PASSWORD || providedPassword === env.PASSWORD;
 }
 
-async function handleManualUpdate(request, env) {
-  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, EMAIL } = loadEnvironmentVariables(env);
+async function handleRequest(env) {
+  const config = loadEnvironmentVariables(env);
+  validateRequiredVariables(config);
 
-  try {
-    validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
-
-    let ips = await getIPs(CUSTOM_IPS, IP_API);
-    if (ips.length === 0) {
-      throw new Error('无法从配置的 IP_API 获取有效的 IP 地址');
-    }
-
-    // 删除现有的 A/AAAA 记录
-    await deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL);
-
-    let updateResults = await updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN);
-    const successCount = updateResults.filter(r => r.success).length;
-    const failureCount = updateResults.filter(r => !r.success).length;
-
-    const currentTime = getCurrentTime();
-    const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
-    const updateStatus = getUpdateStatus(updatedIPs);
-
-    // 获取每个IP地址的地理位置信息
-    const ipLocationInfo = await getIPLocationInfo(updatedIPs);
-
-    // 保存更新历史记录
-    await saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo);
-
-    const response = await generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
-
-    return response;
-  } catch (error) {
-    const errorMessage = `更新失败: ${error.message}`;
-    logError(errorMessage, error);
-    return new Response(errorMessage, {
-      status: 500,
-      headers: getResponseHeaders()
-    });
+  const ips = await getIPs(config.CUSTOM_IPS, config.IP_API);
+  if (ips.length === 0) {
+    throw new Error('无法获取有效的 IP 地址');
   }
+
+  await deleteExistingDNSRecords(config);
+  const updateResults = await updateDNSRecords(ips, config);
+  const { successCount, failureCount, updatedIPs } = processUpdateResults(updateResults);
+
+  const currentTime = getCurrentTime();
+  const updateStatus = getUpdateStatus(updatedIPs);
+  const ipLocationInfo = await getIPLocationInfo(updatedIPs);
+
+  await saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo);
+
+  return generateResponse(config, ips, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
+}
+
+async function handleManualUpdate(env) {
+  return handleRequest(env);
 }
 
 async function getUpdateHistory(env) {
   const history = await env.UPDATE_HISTORY.list();
   const historyItems = await Promise.all(history.keys.map(async (key) => {
-    const value = await env.UPDATE_HISTORY.get(key);
-    return JSON.parse(value);
+    const item = await env.UPDATE_HISTORY.get(key);
+    return item ? JSON.parse(item) : null;
   }));
-
-  const responseHtml = generateHistoryHtml(historyItems);
-
-  return new Response(responseHtml, {
-    headers: getResponseHeaders()
-  });
-}
-
-async function saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo) {
-  const historyItem = {
-    timestamp: currentTime,
-    successCount,
-    failureCount,
-    updatedIPs,
-    ipLocationInfo
-  };
-
-  await env.UPDATE_HISTORY.put(currentTime, JSON.stringify(historyItem));
+  return new Response(generateHistoryHtml(historyItems), { headers: getResponseHeaders() });
 }
 
 function loadEnvironmentVariables(env) {
@@ -141,12 +76,11 @@ function loadEnvironmentVariables(env) {
     DOMAIN: env.DOMAIN,
     CUSTOM_IPS: env.CUSTOM_IPS || '',
     IP_API: env.IP_API || 'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt',
-    PASSWORD: env.PASSWORD || '',
     EMAIL: env.EMAIL || ''
   };
 }
 
-function validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API) {
+function validateRequiredVariables({ API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API }) {
   if (!API_TOKEN || !ZONE_ID || !DOMAIN || !EMAIL || !IP_API) {
     throw new Error('必要的变量未设置。请检查 API_TOKEN, ZONE_ID, DOMAIN, EMAIL 和 IP_API。');
   }
@@ -156,79 +90,51 @@ async function getIPs(CUSTOM_IPS, IP_API) {
   let ips = [];
   if (IP_API) {
     try {
-      logInfo(`${getCurrentTime()} 从 IP_API 获取 IP 地址`);
-      const response = await fetchWithRetry(IP_API, {}, 3);
+      const response = await fetchWithRetry(IP_API);
       const text = await response.text();
       ips = text.trim().split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP);
-      logInfo(`从 IP_API 获取的 IP 地址: ${ips.join(', ')}`);
+      console.log(`从 IP_API 获取的 IP 地址: ${ips.join(', ')}`);
     } catch (error) {
-      logError('从 IP_API 获取 IP 地址失败:', error);
-      throw new Error('无法从 IP_API 获取有效的 IP 地址: ' + error.message);
+      console.error('从 IP_API 获取 IP 地址失败:', error);
     }
   }
   if (CUSTOM_IPS) {
     ips = ips.concat(CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP));
-    logInfo(`从 CUSTOM_IPS 获取的 IP 地址: ${ips.join(', ')}`);
+    console.log(`从 CUSTOM_IPS 获取的 IP 地址: ${ips.join(', ')}`);
   }
-  // 对 IP 地址进行去重
-  ips = [...new Set(ips)];
-  logInfo(`最终用于更新的IP地址: ${ips.join(', ')}`);
-  return ips;
+  return [...new Set(ips)];
 }
 
 function isValidIP(ip) {
-  // 简单的 IP 地址验证
   return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-fA-F0-9:]+$/.test(ip);
 }
 
-async function deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL) {
-  logInfo(`${getCurrentTime()} 删除 ${DOMAIN} 的现有 A/AAAA 记录`);
-
-  let listUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=A,AAAA&name=${DOMAIN}`;
-
-  let response = await fetchWithRetry(
-    listUrl,
-    {
-      method: 'GET',
-      headers: {
-        'X-Auth-Email': EMAIL,
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    },
-    3
-  );
-
-  let data = await response.json();
+async function deleteExistingDNSRecords({ API_TOKEN, ZONE_ID, DOMAIN, EMAIL }) {
+  console.log(`删除 ${DOMAIN} 的现有 A/AAAA 记录`);
+  const listUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?type=A,AAAA&name=${DOMAIN}`;
+  const response = await fetchWithRetry(listUrl, {
+    method: 'GET',
+    headers: getCloudflareHeaders(API_TOKEN, EMAIL)
+  });
 
   if (!response.ok) {
     throw new Error(`获取 ${DOMAIN} 的 DNS 记录失败: ${response.status} ${response.statusText}`);
   }
 
-  const deletePromises = data.result.map(record => deleteDNSRecord(API_TOKEN, ZONE_ID, record.id, EMAIL, DOMAIN));
-  await Promise.all(deletePromises);
+  const data = await response.json();
+  await Promise.all(data.result.map(record => deleteDNSRecord(API_TOKEN, ZONE_ID, record.id, EMAIL, DOMAIN)));
 }
 
-async function updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN) {
-  const createPromises = ips.map(ip => createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, ip.includes(':') ? 'AAAA' : 'A', ip));
-  const createResults = await Promise.all(createPromises);
-  return createResults;
+async function updateDNSRecords(ips, { API_TOKEN, ZONE_ID, DOMAIN }) {
+  return Promise.all(ips.map(ip => createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, ip.includes(':') ? 'AAAA' : 'A', ip)));
 }
 
 async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL, DOMAIN) {
   const deleteUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${recordId}`;
-  const deleteResponse = await fetchWithRetry(
-    deleteUrl,
-    {
-      method: 'DELETE',
-      headers: {
-        'X-Auth-Email': EMAIL,
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    },
-    3
-  );
+  const deleteResponse = await fetchWithRetry(deleteUrl, {
+    method: 'DELETE',
+    headers: getCloudflareHeaders(API_TOKEN, EMAIL)
+  });
 
   if (!deleteResponse.ok) {
     throw new Error(`删除 ${DOMAIN} 的记录失败: ${deleteResponse.status} ${deleteResponse.statusText}`);
@@ -237,24 +143,11 @@ async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL, DOMAIN) {
 
 async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
   const createUrl = `https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records`;
-  const createResponse = await fetchWithRetry(
-    createUrl,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        type,
-        name: DOMAIN,
-        content,
-        ttl: 1,
-        proxied: false
-      })
-    },
-    3
-  );
+  const createResponse = await fetchWithRetry(createUrl, {
+    method: 'POST',
+    headers: getCloudflareHeaders(API_TOKEN),
+    body: JSON.stringify({ type, name: DOMAIN, content, ttl: 1, proxied: false })
+  });
 
   if (!createResponse.ok) {
     const errorData = await createResponse.json();
@@ -265,25 +158,24 @@ async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
   return { success: createData.success, content };
 }
 
-async function fetchWithRetry(url, options, retryCount) {
-  let attempts = 0;
-  while (attempts < retryCount) {
+async function fetchWithRetry(url, options = {}, retryCount = 3) {
+  for (let i = 0; i < retryCount; i++) {
     try {
       return await fetch(url, options);
     } catch (error) {
-      attempts++;
-      logError(`请求 ${url} 失败, 重试 ${attempts}/${retryCount}: ${error.message}`);
+      console.error(`请求 ${url} 失败, 重试 ${i + 1}/${retryCount}: ${error.message}`);
+      if (i === retryCount - 1) throw error;
     }
   }
-  throw new Error(`请求 ${url} 失败, 已达到最大重试次数`);
 }
 
-function logError(message, error) {
-  console.error(`[错误] ${message}`, error);
-}
-
-function logInfo(message) {
-  console.log(`[信息] ${message}`);
+function getCloudflareHeaders(API_TOKEN, EMAIL = '') {
+  const headers = {
+    'Authorization': `Bearer ${API_TOKEN}`,
+    'Content-Type': 'application/json'
+  };
+  if (EMAIL) headers['X-Auth-Email'] = EMAIL;
+  return headers;
 }
 
 function getCurrentTime() {
@@ -305,15 +197,19 @@ function getResponseHeaders() {
   };
 }
 
-async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo) {
-  const responseHtml = generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
-
-  return new Response(responseHtml, {
-    headers: getResponseHeaders()
-  });
+function processUpdateResults(updateResults) {
+  const successCount = updateResults.filter(r => r.success).length;
+  const failureCount = updateResults.length - successCount;
+  const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
+  return { successCount, failureCount, updatedIPs };
 }
 
-function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo) {
+async function generateResponse(config, ips, successCount, failureCount, currentTime, updateStatus, ipLocationInfo) {
+  const responseHtml = generateResponseHtml(config, ips, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
+  return new Response(responseHtml, { headers: getResponseHeaders() });
+}
+
+function generateResponseHtml(config, ips, successCount, failureCount, currentTime, updateStatus, ipLocationInfo) {
   return `
 <!DOCTYPE html>
 <html>
@@ -396,19 +292,19 @@ function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CU
       <h2>Cloudflare 域名配置</h2>
       <div class="info-item">
         <span>域名:</span>
-        <p>${DOMAIN}</p>
+        <p>${config.DOMAIN}</p>
       </div>
       <div class="info-item">
         <span>邮箱:</span>
-        <p>${maskEmail(EMAIL)}</p>
+        <p>${maskEmail(config.EMAIL)}</p>
       </div>
       <div class="info-item">
         <span>区域 ID:</span>
-        <p>${maskZoneID(ZONE_ID)}</p>
+        <p>${maskZoneID(config.ZONE_ID)}</p>
       </div>
       <div class="info-item">
         <span>API 令牌:</span>
-        <p>${maskAPIToken(API_TOKEN)}</p>
+        <p>${maskAPIToken(config.API_TOKEN)}</p>
       </div>
     </div>
     <div class="section">
@@ -419,14 +315,14 @@ function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CU
       </div>
       <div class="info-item">
         <span>IP_API:</span>
-        <p>${IP_API}</p>
+        <p>${config.IP_API}</p>
       </div>
     </div>
     <div class="section">
       <h2>结果</h2>
       <div class="info-item">
         <span>CUSTOM_IPS:</span>
-        <p>${CUSTOM_IPS.split('\n').join('<br>')}</p>
+        <p>${config.CUSTOM_IPS.split('\n').join('<br>')}</p>
       </div>
       <div class="info-item">
         <span>IP_API:</span>
@@ -461,7 +357,7 @@ function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CU
       <h2>执行日志</h2>
       <div class="log-item">${currentTime} 变量加载完成</div>
       <div class="log-item">${currentTime} 域名解析完成</div>
-      <div class="log-item">${currentTime} 删除 ${DOMAIN} 的现有 A/AAAA 记录</div>
+      <div class="log-item">${currentTime} 删除 ${config.DOMAIN} 的现有 A/AAAA 记录</div>
       <div class="log-item">${currentTime} API获取 A/AAAA记录${ips.join(', ')}</div>
       <div class="log-item">${currentTime} API调用完成</div>
       <div class="log-item">${currentTime} IP去重完成</div>
@@ -534,7 +430,7 @@ function generateHistoryHtml(historyItems) {
 <body>
   <div class="container">
     <h1>更新历史记录</h1>
-    ${historyItems.map(item => `
+    ${historyItems.filter(item => item !== null && item !== undefined).map(item => `
       <div class="history-item">
         <h2>${item.timestamp}</h2>
         <div class="info-item">
@@ -587,7 +483,7 @@ function maskString(str, startLength, endLength) {
 }
 
 async function getIPLocationInfo(ips) {
-  const locationPromises = ips.map(async (ip) => {
+  return Promise.all(ips.map(async (ip) => {
     try {
       const response = await fetchWithRetry(`https://ipinfo.io/${ip}/json`, {}, 3);
       const data = await response.json();
@@ -596,13 +492,28 @@ async function getIPLocationInfo(ips) {
         location: `${data.city}, ${data.region}, ${data.country}`
       };
     } catch (error) {
-      logError(`获取 ${ip} 的地理位置信息失败:`, error);
+      console.error(`获取 ${ip} 的地理位置信息失败:`, error);
       return {
         ip,
         location: '未知'
       };
     }
-  });
+  }));
+}
 
-  return await Promise.all(locationPromises);
+function handleError(error) {
+  console.error('操作失败:', error);
+  return new Response(`操作失败: ${error.message}`, {
+    status: 500,
+    headers: getResponseHeaders()
+  });
+}
+
+function methodNotAllowed() {
+  return new Response('Method Not Allowed', { status: 405, headers: getResponseHeaders() });
+}
+
+async function saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo) {
+  const historyItem = { timestamp: currentTime, successCount, failureCount, updatedIPs, ipLocationInfo };
+  await env.UPDATE_HISTORY.put(currentTime, JSON.stringify(historyItem));
 }
