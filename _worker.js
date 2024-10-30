@@ -24,7 +24,7 @@ async function handleRequest(request, env) {
   try {
     validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
 
-    let ips = await getIPs(CUSTOM_IPS, IP_API, url);
+    let ips = await getIPs(CUSTOM_IPS, IP_API);
     if (ips.length === 0) {
       throw new Error('无法从配置的 IP_API 获取有效的 IP 地址');
     }
@@ -71,40 +71,33 @@ function validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API) {
   }
 }
 
-async function getIPs(CUSTOM_IPS, IP_API, url) {
+async function getIPs(CUSTOM_IPS, IP_API) {
   let ips = [];
-  const ipAddresses = url.searchParams.get('ip_addresses');
-  if (ipAddresses) {
-    ips = ipAddresses.split(',').map(ip => ip.trim());
-  } else if (CUSTOM_IPS) {
-    ips = CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP);
-  } else {
+  if (IP_API) {
     try {
       logInfo(`${getCurrentTime()} 从 IP_API 获取 IP 地址`);
-      ips = await fetchIPsFromAPI(IP_API);
+      const response = await fetchWithRetry(IP_API, {}, 3);
+      const text = await response.text();
+      ips = text.trim().split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP);
       logInfo(`从 IP_API 获取的 IP 地址: ${ips.join(', ')}`);
     } catch (error) {
       logError('从 IP_API 获取 IP 地址失败:', error);
       throw new Error('无法从 IP_API 获取有效的 IP 地址: ' + error.message);
     }
   }
+  if (CUSTOM_IPS) {
+    ips = ips.concat(CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP));
+    logInfo(`从 CUSTOM_IPS 获取的 IP 地址: ${ips.join(', ')}`);
+  }
   // 对 IP 地址进行去重
   ips = [...new Set(ips)];
+  logInfo(`最终用于更新的IP地址: ${ips.join(', ')}`);
   return ips;
 }
 
 function isValidIP(ip) {
   // 简单的 IP 地址验证
   return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-fA-F0-9:]+$/.test(ip);
-}
-
-async function fetchIPsFromAPI(IP_API) {
-  let response = await fetchWithRetry(IP_API, {}, 3);
-  if (!response.ok) {
-    throw new Error(`从 IP_API 获取 IP 地址失败: HTTP 错误 ${response.status}`);
-  }
-  let text = await response.text();
-  return text.trim().split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP);
 }
 
 async function deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL) {
@@ -184,7 +177,7 @@ async function createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, type, content) {
 
   if (!createResponse.ok) {
     const errorData = await createResponse.json();
-    throw new Error(`创建 ${type} 记录 ${content} 失败: ${errorData.errors.message}`);
+    throw new Error(`创建 ${type} 记录 ${content} 失败: ${errorData.errors[0].message}`);
   }
 
   const createData = await createResponse.json();
@@ -205,7 +198,10 @@ async function fetchWithRetry(url, options, retryCount) {
 }
 
 function logError(message, error) {
-  console.error(`[错误] ${message}`, error);
+  console.error(`[错误] ${message}`);
+  if (error) {
+    console.error(error);
+  }
 }
 
 function logInfo(message) {
@@ -242,7 +238,7 @@ async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, 
 function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
   return `
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <title>Cloudflare 域名配置</title>
