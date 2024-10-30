@@ -92,21 +92,53 @@ async function getIPs(CUSTOM_IPS, IP_API) {
     try {
       const response = await fetchWithRetry(IP_API);
       const text = await response.text();
-      ips = text.trim().split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP);
+      ips = text.trim().split(/[,\n]+/).map(ip => ip.trim());
       console.log(`从 IP_API 获取的 IP 地址: ${ips.join(', ')}`);
     } catch (error) {
       console.error('从 IP_API 获取 IP 地址失败:', error);
     }
   }
   if (CUSTOM_IPS) {
-    ips = ips.concat(CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()).filter(isValidIP));
+    ips = ips.concat(CUSTOM_IPS.split(/[,\n]+/).map(ip => ip.trim()));
     console.log(`从 CUSTOM_IPS 获取的 IP 地址: ${ips.join(', ')}`);
   }
   return [...new Set(ips)];
 }
 
-function isValidIP(ip) {
-  return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-fA-F0-9:]+$/.test(ip);
+async function updateDNSRecords(ips, { API_TOKEN, ZONE_ID, DOMAIN }) {
+  const resolvedIPs = await Promise.all(ips.map(async (ip) => {
+    if (isValidIP(ip)) {
+      return { original: ip, resolved: ip };
+    } else if (isValidDomain(ip)) {
+      try {
+        const resolvedIP = await resolveDomain(ip);
+        return { original: ip, resolved: resolvedIP };
+      } catch (error) {
+        console.error(`解析域名 ${ip} 失败:`, error);
+        return null;
+      }
+    } else {
+      console.error(`无效的 IP 或域名: ${ip}`);
+      return null;
+    }
+  }));
+
+  const validResolvedIPs = resolvedIPs.filter(item => item !== null);
+
+  return Promise.all(validResolvedIPs.map(item =>
+    createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, item.resolved.includes(':') ? 'AAAA' : 'A', item.resolved)
+  ));
+}
+
+async function resolveDomain(domain) {
+  const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${domain}&type=A`, {
+    headers: { 'Accept': 'application/dns-json' }
+  });
+  const data = await response.json();
+  if (data.Answer && data.Answer.length > 0) {
+    return data.Answer[0].data;
+  }
+  throw new Error(`无法解析域名 ${domain}`);
 }
 
 async function deleteExistingDNSRecords({ API_TOKEN, ZONE_ID, DOMAIN, EMAIL }) {
@@ -123,10 +155,6 @@ async function deleteExistingDNSRecords({ API_TOKEN, ZONE_ID, DOMAIN, EMAIL }) {
 
   const data = await response.json();
   await Promise.all(data.result.map(record => deleteDNSRecord(API_TOKEN, ZONE_ID, record.id, EMAIL, DOMAIN)));
-}
-
-async function updateDNSRecords(ips, { API_TOKEN, ZONE_ID, DOMAIN }) {
-  return Promise.all(ips.map(ip => createDNSRecord(API_TOKEN, ZONE_ID, DOMAIN, ip.includes(':') ? 'AAAA' : 'A', ip)));
 }
 
 async function deleteDNSRecord(API_TOKEN, ZONE_ID, recordId, EMAIL, DOMAIN) {
@@ -516,4 +544,13 @@ function methodNotAllowed() {
 async function saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo) {
   const historyItem = { timestamp: currentTime, successCount, failureCount, updatedIPs, ipLocationInfo };
   await env.UPDATE_HISTORY.put(currentTime, JSON.stringify(historyItem));
+}
+
+function isValidIP(ip) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) || /^[a-fA-F0-9:]+$/.test(ip);
+}
+
+function isValidDomain(domain) {
+  const domainRegex = /^(?!:\/\/)([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$/;
+  return domainRegex.test(domain);
 }
