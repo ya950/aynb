@@ -31,7 +31,8 @@
 | CUSTOM_IPS | `cdn.xn--b6gac.eu.org``8.8.8.8` `2406:8dc0:6004:7019:ca7a:65a0:d3d7:1467` |×| 获取待解析至`待解析域名`IP的域名(支持多元素之间`,`或 换行 作间隔) |
 | IP_API | `https://ipdb.030101.xyz/api/bestproxy.txt` |×| 通过API获取待解析至`待解析域名`IP的接口(支持多元素之间`,`或 换行 作间隔) |
 ### KV空间设置
-UPDATE_HISTORY: 用于存储更新历史的 KV 存储对象
+-UPDATE_HISTORY: 用于存储更新历史的 KV 存储对象
+
 -创建一个KV空间命名为UPDATE_HISTORY
 
 -绑定刚创建的KV空间UPDATE_HISTORY，变量名称也为UPDATE_HISTORY
