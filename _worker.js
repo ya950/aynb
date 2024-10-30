@@ -1,6 +1,24 @@
 export default {
   async fetch(request, env, ctx) {
-    return await handleRequest(request, env);
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+
+    // 检查密码,但对 /update 和 /history 路径不做密码检查
+    const providedPassword = url.searchParams.get('password');
+    if (pathname !== '/update' && pathname !== '/history' && env.PASSWORD && providedPassword !== env.PASSWORD) {
+      return new Response('访问被拒绝', {
+        status: 403,
+        headers: getResponseHeaders()
+      });
+    }
+
+    if (pathname === '/update' && request.method === 'POST') {
+      return await handleManualUpdate(request, env);
+    } else if (pathname === '/history') {
+      return await getUpdateHistory(env);
+    } else {
+      return await handleRequest(request, env);
+    }
   },
 
   async scheduled(event, env, ctx) {
@@ -9,17 +27,7 @@ export default {
 };
 
 async function handleRequest(request, env) {
-  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, PASSWORD, EMAIL } = loadEnvironmentVariables(env);
-
-  // 检查密码
-  const url = new URL(request.url);
-  const providedPassword = url.searchParams.get('password');
-  if (PASSWORD && providedPassword !== PASSWORD) {
-    return new Response('访问被拒绝', {
-      status: 403,
-      headers: getResponseHeaders()
-    });
-  }
+  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, EMAIL } = loadEnvironmentVariables(env);
 
   try {
     validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
@@ -40,7 +48,13 @@ async function handleRequest(request, env) {
     const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
     const updateStatus = getUpdateStatus(updatedIPs);
 
-    const response = await generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus);
+    // 获取每个IP地址的地理位置信息
+    const ipLocationInfo = await getIPLocationInfo(updatedIPs);
+
+    // 保存更新历史记录
+    await saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo);
+
+    const response = await generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
 
     return response;
   } catch (error) {
@@ -51,6 +65,73 @@ async function handleRequest(request, env) {
       headers: getResponseHeaders()
     });
   }
+}
+
+async function handleManualUpdate(request, env) {
+  const { API_TOKEN, ZONE_ID, DOMAIN, CUSTOM_IPS, IP_API, EMAIL } = loadEnvironmentVariables(env);
+
+  try {
+    validateRequiredVariables(API_TOKEN, ZONE_ID, DOMAIN, EMAIL, IP_API);
+
+    let ips = await getIPs(CUSTOM_IPS, IP_API);
+    if (ips.length === 0) {
+      throw new Error('无法从配置的 IP_API 获取有效的 IP 地址');
+    }
+
+    // 删除现有的 A/AAAA 记录
+    await deleteExistingDNSRecords(API_TOKEN, ZONE_ID, DOMAIN, EMAIL);
+
+    let updateResults = await updateDNSRecords(ips, API_TOKEN, ZONE_ID, DOMAIN);
+    const successCount = updateResults.filter(r => r.success).length;
+    const failureCount = updateResults.filter(r => !r.success).length;
+
+    const currentTime = getCurrentTime();
+    const updatedIPs = updateResults.filter(r => r.success).map(r => r.content);
+    const updateStatus = getUpdateStatus(updatedIPs);
+
+    // 获取每个IP地址的地理位置信息
+    const ipLocationInfo = await getIPLocationInfo(updatedIPs);
+
+    // 保存更新历史记录
+    await saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo);
+
+    const response = await generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
+
+    return response;
+  } catch (error) {
+    const errorMessage = `更新失败: ${error.message}`;
+    logError(errorMessage, error);
+    return new Response(errorMessage, {
+      status: 500,
+      headers: getResponseHeaders()
+    });
+  }
+}
+
+async function getUpdateHistory(env) {
+  const history = await env.UPDATE_HISTORY.list();
+  const historyItems = await Promise.all(history.keys.map(async (key) => {
+    const value = await env.UPDATE_HISTORY.get(key);
+    return JSON.parse(value);
+  }));
+
+  const responseHtml = generateHistoryHtml(historyItems);
+
+  return new Response(responseHtml, {
+    headers: getResponseHeaders()
+  });
+}
+
+async function saveUpdateHistory(env, currentTime, successCount, failureCount, updatedIPs, ipLocationInfo) {
+  const historyItem = {
+    timestamp: currentTime,
+    successCount,
+    failureCount,
+    updatedIPs,
+    ipLocationInfo
+  };
+
+  await env.UPDATE_HISTORY.put(currentTime, JSON.stringify(historyItem));
 }
 
 function loadEnvironmentVariables(env) {
@@ -198,10 +279,7 @@ async function fetchWithRetry(url, options, retryCount) {
 }
 
 function logError(message, error) {
-  console.error(`[错误] ${message}`);
-  if (error) {
-    console.error(error);
-  }
+  console.error(`[错误] ${message}`, error);
 }
 
 function logInfo(message) {
@@ -227,18 +305,18 @@ function getResponseHeaders() {
   };
 }
 
-async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
-  const responseHtml = generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus);
+async function generateResponse(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo) {
+  const responseHtml = generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo);
 
   return new Response(responseHtml, {
     headers: getResponseHeaders()
   });
 }
 
-function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus) {
+function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CUSTOM_IPS, successCount, failureCount, currentTime, updateStatus, ipLocationInfo) {
   return `
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html>
 <head>
   <meta charset="UTF-8">
   <title>Cloudflare 域名配置</title>
@@ -286,11 +364,34 @@ function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CU
     .log-item {
       margin-bottom: 5px;
     }
+    .button {
+      background-color: #4CAF50;
+      border: none;
+      color: white;
+      padding: 15px 32px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+    }
+    .button:hover {
+      background-color: #45a049;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Cloudflare 域名配置</h1>
+
+    <!-- 添加手动更新按钮 -->
+    <div class="section">
+      <h2>手动操作</h2>
+      <button class="button" onclick="manualUpdate()">手动更新DNS记录</button>
+      <a href="/history" class="button">查看更新历史</a>
+    </div>
+
     <div class="section">
       <h2>Cloudflare 域名配置</h2>
       <div class="info-item">
@@ -344,6 +445,19 @@ function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CU
       </div>
     </div>
     <div class="section">
+      <h2>IP 地理位置信息</h2>
+      ${ipLocationInfo.map(info => `
+        <div class="info-item">
+          <span>IP:</span>
+          <p>${info.ip}</p>
+        </div>
+        <div class="info-item">
+          <span>位置:</span>
+          <p>${info.location}</p>
+        </div>
+      `).join('')}
+    </div>
+    <div class="section">
       <h2>执行日志</h2>
       <div class="log-item">${currentTime} 变量加载完成</div>
       <div class="log-item">${currentTime} 域名解析完成</div>
@@ -353,6 +467,100 @@ function generateResponseHtml(DOMAIN, EMAIL, ZONE_ID, API_TOKEN, ips, IP_API, CU
       <div class="log-item">${currentTime} IP去重完成</div>
       <div class="log-item">${currentTime} ${updateStatus}</div>
     </div>
+  </div>
+
+  <script>
+    function manualUpdate() {
+      fetch('/update', { method: 'POST' })
+        .then(response => response.text())
+        .then(result => {
+          alert(result);
+          location.reload();
+        })
+        .catch(error => alert('更新失败: ' + error));
+    }
+  </script>
+</body>
+</html>
+`;
+}
+
+function generateHistoryHtml(historyItems) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>更新历史记录</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    .history-item {
+      background-color: white;
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .history-item h2 {
+      margin-top: 0;
+    }
+    .info-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .info-item span {
+      font-weight: bold;
+    }
+    .info-item p {
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>更新历史记录</h1>
+    ${historyItems.map(item => `
+      <div class="history-item">
+        <h2>${item.timestamp}</h2>
+        <div class="info-item">
+          <span>更新成功:</span>
+          <p>${item.successCount}</p>
+        </div>
+        <div class="info-item">
+          <span>更新失败:</span>
+          <p>${item.failureCount}</p>
+        </div>
+        <div class="info-item">
+          <span>更新的 IP 地址:</span>
+          <p>${item.updatedIPs.join('<br>')}</p>
+        </div>
+        ${item.ipLocationInfo.map(info => `
+          <div class="info-item">
+            <span>IP:</span>
+            <p>${info.ip}</p>
+          </div>
+          <div class="info-item">
+            <span>位置:</span>
+            <p>${info.location}</p>
+          </div>
+        `).join('')}
+      </div>
+    `).join('')}
   </div>
 </body>
 </html>
@@ -376,4 +584,25 @@ function maskEmail(email) {
 function maskString(str, startLength, endLength) {
   if (str.length <= 8) return str;
   return str.substr(0, startLength) + '*'.repeat(str.length - startLength - endLength) + str.substr(-endLength);
+}
+
+async function getIPLocationInfo(ips) {
+  const locationPromises = ips.map(async (ip) => {
+    try {
+      const response = await fetchWithRetry(`https://ipinfo.io/${ip}/json`, {}, 3);
+      const data = await response.json();
+      return {
+        ip,
+        location: `${data.city}, ${data.region}, ${data.country}`
+      };
+    } catch (error) {
+      logError(`获取 ${ip} 的地理位置信息失败:`, error);
+      return {
+        ip,
+        location: '未知'
+      };
+    }
+  });
+
+  return await Promise.all(locationPromises);
 }
