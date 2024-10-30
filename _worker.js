@@ -75,7 +75,7 @@ function loadEnvironmentVariables(env) {
     ZONE_ID: env.ZONE_ID,
     DOMAIN: env.DOMAIN,
     CUSTOM_IPS: env.CUSTOM_IPS || '',
-    IP_API: env.IP_API || 'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestproxy.txt',
+    IP_API: env.IP_API || '',
     EMAIL: env.EMAIL || ''
   };
 }
