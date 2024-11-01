@@ -24,7 +24,7 @@
 | 变量名 | 示例 | 必填 | 备注 |
 |--------|---------|-|-----|
 | CFMAIL  | `admin@gmail.com` |√| Cloudflare 登录邮箱 |
-| DOMAIN  | `ddns.google.com` |√| Cloudflare 待解析域名 |
+| DOMAIN  | `ddns.google.com` |√| Cloudflare 待解析域名 支持多个域名更新|
 | ZONE_ID   | `6f0b34f36efb4bdaf5e22d68ac8e5c96` |√| Cloudflare 区域ID | 
 | API_TOKEN  | `tGb4_4f5e23efb4d68ac28exRnJTfbdaC6-IWocs` |√| Cloudflare API令牌 |
 | PASSWORD | `admin` |×| **手动执行**时验证密码，密码不正确拒绝访问 |
